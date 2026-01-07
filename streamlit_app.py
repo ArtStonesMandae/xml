@@ -1,7 +1,7 @@
 import os
 import re
 from datetime import datetime
-from typing import List
+from typing import List, Tuple
 
 import streamlit as st
 from pypdf import PdfReader
@@ -13,14 +13,18 @@ KEY_RE = re.compile(r"\b\d{44}\b")
 
 
 def extract_keys_from_pdf(pdf_path: str) -> List[str]:
+    """Extrai chaves de 44 dígitos do PDF, removendo duplicadas e preservando ordem."""
     reader = PdfReader(pdf_path)
-    keys, seen = [], set()
+    keys: List[str] = []
+    seen = set()
+
     for page in reader.pages:
         text = page.extract_text() or ""
         for k in KEY_RE.findall(text):
             if k not in seen:
                 seen.add(k)
                 keys.append(k)
+
     return keys
 
 
@@ -29,6 +33,7 @@ def today_br() -> str:
 
 
 def normalize_hora(h: str) -> str:
+    """Mantém o padrão '_____ : _____' quando vazio/placeholder."""
     if not h or not h.strip():
         return "_____ : _____"
     s = h.strip()
@@ -37,63 +42,104 @@ def normalize_hora(h: str) -> str:
     return s
 
 
-def render_pdf(out_path: str, data: str, hora: str, keys: List[str]):
+def write_txt(out_path: str, keys: List[str]) -> None:
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(keys))
+        f.write("\n")
+
+
+def _new_page(c: canvas.Canvas) -> Tuple[float, float, float, float]:
+    """Retorna (w, h, left, top_y) para nova página com margens fixas."""
+    w, h = A4
+    left = 30 * mm
+    top_y = h - 30 * mm
+    return w, h, left, top_y
+
+
+def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
+    """
+    Gera PDF A4 pronto para imprimir, com layout 'arejado' no padrão do exemplo:
+    - Espaços grandes entre blocos
+    - Lista começa mais abaixo
+    - Assinaturas alinhadas e com linhas
+    """
     c = canvas.Canvas(out_path, pagesize=A4)
-    _, h = A4
 
-    left = 20 * mm
-    top = h - 20 * mm
-    lh = 6.2 * mm
-    y = top
+    w, h, left, y = _new_page(c)
 
-    def draw(txt: str, size=11):
+    # Tipografia: o exemplo tem "cara de documento operacional".
+    # Helvetica funciona bem; se quiser ainda mais "datilografado", troque para "Courier".
+    font_main = "Helvetica"
+    font_list = "Helvetica"
+
+    line_h = 7.0 * mm  # altura base de linha (mais confortável)
+
+    def spacer(lines: float = 1.0):
         nonlocal y
-        c.setFont("Helvetica", size)
+        y -= line_h * lines
+
+    def draw_line(txt: str, size: float = 11, font: str = None):
+        nonlocal y
+        c.setFont(font or font_main, size)
         c.drawString(left, y, txt)
-        y -= lh
+        y -= line_h
 
-    # Cabeçalho
-    draw("CLIENTE:")
-    y -= lh * 1.2
-
-    draw("DATA DA COLETA:")
-    draw(data)
-    y -= lh * 0.6
-
-    draw("HORA DA COLETA:")
-    draw(hora)
-    y -= lh * 0.8
-
-    # Lista
-    draw("CHAVES DE ACESSO:")
-    y -= lh * 0.2
-
-    c.setFont("Helvetica", 10.8)
-    for k in keys:
-        if y < 40 * mm:
+    def ensure_space(min_y_mm: float = 35):
+        """Se y estiver perto do rodapé, cria nova página."""
+        nonlocal w, h, left, y
+        if y < (min_y_mm * mm):
             c.showPage()
-            y = top
-            c.setFont("Helvetica", 10.8)
+            w, h, left, y = _new_page(c)
+
+    # ===== CABEÇALHO (com respiro igual ao exemplo) =====
+    draw_line("CLIENTE:", size=11)
+    spacer(3.0)
+
+    draw_line("DATA DA COLETA:", size=11)
+    draw_line(data, size=11)
+    spacer(3.0)
+
+    draw_line("HORA DA COLETA:", size=11)
+    draw_line(hora, size=11)
+    spacer(2.5)
+
+    # ===== LISTA =====
+    draw_line("CHAVES DE ACESSO:", size=11)
+    spacer(1.2)
+
+    # Lista com tamanho levemente menor e espaçamento agradável
+    c.setFont(font_list, 10.6)
+    for k in keys:
+        ensure_space(min_y_mm=40)
         c.drawString(left, y, k)
-        y -= lh * 0.85
+        y -= line_h * 0.95
 
-    y -= lh * 0.8
-    draw(f"TOTAL DA REMESSA:  {len(keys)} VOLUMES")
+    spacer(2.2)
 
-    # Assinaturas no rodapé
-    if y < 55 * mm:
+    draw_line(f"TOTAL DA REMESSA:  {len(keys)} VOLUMES", size=11)
+
+    # ===== ASSINATURAS NO RODAPÉ (sempre na última página) =====
+    # Se o conteúdo ficou muito baixo, cria nova página para o rodapé ficar limpo.
+    if y < (60 * mm):
         c.showPage()
+        w, h, left, y = _new_page(c)
 
-    y_sig = 25 * mm
-    c.setFont("Helvetica", 9.5)
-    c.drawString(left + 70 * mm, y_sig + 12, "ASSINATURA DO REPRESENTANTE")
-    c.drawString(left + 140 * mm, y_sig + 12, "ASSINATURA DO MOTORISTA")
-    c.line(left + 55 * mm, y_sig + 10, left + 118 * mm, y_sig + 10)
-    c.line(left + 130 * mm, y_sig + 10, left + 193 * mm, y_sig + 10)
+    sig_y = 25 * mm
+
+    c.setFont(font_main, 9.5)
+    c.drawCentredString(w * 0.35, sig_y + 12, "ASSINATURA DO REPRESENTANTE")
+    c.drawCentredString(w * 0.75, sig_y + 12, "ASSINATURA DO MOTORISTA")
+
+    # Linhas de assinatura
+    c.line(w * 0.20, sig_y + 10, w * 0.50, sig_y + 10)
+    c.line(w * 0.60, sig_y + 10, w * 0.90, sig_y + 10)
 
     c.save()
 
 
+# =========================
+# UI - Streamlit
+# =========================
 st.set_page_config(page_title="Extrator de Chaves NF-e", layout="centered")
 st.title("Extrator de Chaves NF-e (PDF → PDF para imprimir)")
 
@@ -101,35 +147,60 @@ pdf = st.file_uploader("Envie o PDF", type=["pdf"])
 data = st.text_input("Data da coleta", value=today_br())
 hora = st.text_input("Hora da coleta", value="_____ : _____")
 
+col1, col2 = st.columns(2)
+with col1:
+    gerar_txt = st.checkbox("Gerar TXT (opcional)", value=True)
+with col2:
+    mostrar_preview = st.checkbox("Mostrar prévia (10 primeiras chaves)", value=True)
+
+if pdf is not None:
+    st.caption(f"Arquivo: {pdf.name}")
+
 if st.button("Gerar arquivos", disabled=(pdf is None)):
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    tmp_in = os.path.join(os.getcwd(), f"entrada_{ts}.pdf")
+
+    # Em ambiente de servidor, /tmp é mais seguro.
+    tmp_in = os.path.join("/tmp", f"entrada_{ts}.pdf")
+    out_pdf = os.path.join("/tmp", f"Chaves_de_Acesso_{ts}.pdf")
+    out_txt = os.path.join("/tmp", f"Chaves_{ts}.txt")
+
+    # Salva o PDF enviado
     with open(tmp_in, "wb") as f:
         f.write(pdf.read())
 
+    # Extrai chaves
     keys = extract_keys_from_pdf(tmp_in)
     if not keys:
         st.error("Não encontrei chaves de acesso (44 dígitos) no PDF.")
-    else:
-        hora_norm = normalize_hora(hora)
-        out_pdf = os.path.join(os.getcwd(), f"Chaves_de_Acesso_{ts}.pdf")
-        out_txt = os.path.join(os.getcwd(), f"Chaves_{ts}.txt")
+        try:
+            os.remove(tmp_in)
+        except Exception:
+            pass
+        st.stop()
 
-        render_pdf(out_pdf, (data or today_br()).strip(), hora_norm, keys)
+    # Normaliza campos
+    data_norm = (data or today_br()).strip()
+    hora_norm = normalize_hora(hora)
 
-        with open(out_txt, "w", encoding="utf-8") as f:
-            f.write("\n".join(keys) + "\n")
+    # Gera PDF final
+    render_pdf(out_pdf, data_norm, hora_norm, keys)
 
-        st.success(f"{len(keys)} chaves encontradas.")
+    # TXT opcional
+    if gerar_txt:
+        write_txt(out_txt, keys)
 
-        with open(out_pdf, "rb") as f:
-            st.download_button(
-                "Baixar PDF pronto para imprimir",
-                data=f,
-                file_name=os.path.basename(out_pdf),
-                mime="application/pdf",
-            )
+    st.success(f"{len(keys)} chaves encontradas.")
 
+    # Downloads
+    with open(out_pdf, "rb") as f:
+        st.download_button(
+            "Baixar PDF pronto para imprimir",
+            data=f,
+            file_name=os.path.basename(out_pdf),
+            mime="application/pdf",
+        )
+
+    if gerar_txt:
         with open(out_txt, "rb") as f:
             st.download_button(
                 "Baixar TXT (opcional)",
@@ -138,9 +209,11 @@ if st.button("Gerar arquivos", disabled=(pdf is None)):
                 mime="text/plain",
             )
 
+    # Prévia
+    if mostrar_preview:
         st.text_area("Prévia (primeiras 10 chaves)", "\n".join(keys[:10]), height=220)
 
-    # limpeza do arquivo de entrada
+    # Limpeza
     try:
         os.remove(tmp_in)
     except Exception:
