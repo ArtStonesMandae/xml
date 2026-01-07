@@ -1,3 +1,9 @@
+# Script completo atualizado:
+# - Caixa (retângulo) envolvendo "CLIENTE + DATA" na 1ª linha
+# - Caixa (retângulo) envolvendo "HORA DA COLETA + hora" (como no exemplo)
+# - Espaçamento maior entre HORA e "CHAVES DE ACESSO:"
+# - Mantém colunas 2/3, sem quebrar chaves, total perto do fim e assinaturas com linha acima
+
 import os
 import re
 from datetime import datetime
@@ -17,11 +23,9 @@ KEY_RE = re.compile(r"\b\d{44}\b")
 # EXTRAÇÃO
 # =========================
 def extract_keys_from_pdf(pdf_path: str) -> List[str]:
-    """Extrai chaves de 44 dígitos do PDF, removendo duplicadas e preservando ordem."""
     reader = PdfReader(pdf_path)
     keys: List[str] = []
     seen = set()
-
     for page in reader.pages:
         text = page.extract_text() or ""
         for k in KEY_RE.findall(text):
@@ -39,7 +43,6 @@ def today_br() -> str:
 
 
 def normalize_data(d: str) -> str:
-    """Valida dd/mm/aaaa. Se inválida, usa hoje."""
     s = (d or "").strip()
     try:
         dt = datetime.strptime(s, "%d/%m/%Y")
@@ -49,7 +52,6 @@ def normalize_data(d: str) -> str:
 
 
 def normalize_hora(h: str) -> str:
-    """Mantém o padrão '_____ : _____' quando vazio/placeholder."""
     if not h or not h.strip():
         return "_____ : _____"
     s = h.strip()
@@ -68,10 +70,6 @@ def write_txt(out_path: str, keys: List[str]) -> None:
 # PDF
 # =========================
 def _page_geometry() -> Tuple[float, float, float, float, float, float]:
-    """
-    Retorna: (w, h, left, right, top, bottom_sig)
-    bottom_sig = área de rodapé para assinaturas.
-    """
     w, h = A4
     left = 18 * mm
     right = 18 * mm
@@ -81,7 +79,6 @@ def _page_geometry() -> Tuple[float, float, float, float, float, float]:
 
 
 def _fit_font_size_for_column(text_sample: str, col_width: float, font: str, max_size: float) -> float:
-    """Escolhe tamanho de fonte que não estoura a coluna (sem quebrar texto)."""
     size = max_size
     while size >= 7.5:
         if pdfmetrics.stringWidth(text_sample, font, size) <= col_width:
@@ -91,26 +88,15 @@ def _fit_font_size_for_column(text_sample: str, col_width: float, font: str, max
 
 
 def _choose_columns(keys: List[str], lines_per_col: int) -> int:
-    """2 colunas por padrão; 3 apenas se reduzir páginas."""
     n = len(keys)
     per_page_2 = lines_per_col * 2
     pages_2 = (n + per_page_2 - 1) // per_page_2 if per_page_2 else 10**9
-
     per_page_3 = lines_per_col * 3
     pages_3 = (n + per_page_3 - 1) // per_page_3 if per_page_3 else 10**9
-
     return 3 if pages_3 < pages_2 else 2
 
 
 def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
-    """
-    - Cliente fixo: ArtStones
-    - Data ao lado do cliente
-    - Chaves em 2 colunas (ou 3 se reduzir páginas)
-    - 1 chave por linha sem quebrar
-    - Total logo após a última chave
-    - Assinaturas com LINHA ACIMA e texto abaixo
-    """
     c = canvas.Canvas(out_path, pagesize=A4)
 
     w, h, left, right, top, bottom_sig = _page_geometry()
@@ -123,11 +109,12 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     line_h = 6.0 * mm
     y = top
 
-    def line(txt: str, size: float = main_size):
-        nonlocal y
+    def set_font(size: float):
         c.setFont(font_main, size)
-        c.drawString(left, y, txt)
-        y -= line_h
+
+    def draw_text(x: float, yy: float, txt: str, size: float = main_size):
+        set_font(size)
+        c.drawString(x, yy, txt)
 
     def new_page_repeat_section_title():
         nonlocal y, w, h, left, right, top, bottom_sig
@@ -138,18 +125,42 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
         c.drawString(left, y, "CHAVES DE ACESSO:")
         y -= line_h * 1.1
 
-    # ===== CABEÇALHO =====
-    line(f"CLIENTE:  ArtStones     DATA DA COLETA:  {data}", size=11)
-    y -= line_h * 0.4
+    # =========================
+    # HEADER COM CAIXAS
+    # =========================
+    # Caixa 1: CLIENTE + DATA (uma faixa)
+    header1_y = y
+    header1_h = 9 * mm
+    header1_w = w - left - right
 
-    line("HORA DA COLETA:", size=11)
-    line(hora, size=11)
-    y -= line_h * 0.6
+    c.rect(left, header1_y - header1_h + 2, header1_w, header1_h, stroke=1, fill=0)
+    draw_text(left + 3 * mm, header1_y - 6 * mm, f"CLIENTE:  ArtStones     DATA DA COLETA:  {data}", size=11)
 
-    line("CHAVES DE ACESSO:", size=11)
-    y -= line_h * 0.3
+    y -= header1_h + 4 * mm
 
-    # Área útil para lista (reserva rodapé)
+    # Caixa 2: HORA (bloco menor, como no seu exemplo)
+    box2_x = left
+    box2_w = 55 * mm
+    box2_h = 22 * mm
+    box2_top = y
+
+    c.rect(box2_x, box2_top - box2_h, box2_w, box2_h, stroke=1, fill=0)
+    draw_text(box2_x + 3 * mm, box2_top - 7 * mm, "HORA DA COLETA:", size=11)
+    draw_text(box2_x + 3 * mm, box2_top - 16 * mm, hora, size=11)
+
+    # Avança y para depois do bloco de hora
+    y = box2_top - box2_h - (6 * mm)
+
+    # Espaçamento maior antes de "CHAVES DE ACESSO:"
+    y -= 6 * mm
+
+    c.setFont(font_main, 11)
+    c.drawString(left, y, "CHAVES DE ACESSO:")
+    y -= line_h * 1.0
+
+    # =========================
+    # LISTA EM COLUNAS (2/3)
+    # =========================
     list_bottom = bottom_sig + 20 * mm
     list_line_h = 5.0 * mm
     usable_h = y - list_bottom
@@ -163,9 +174,8 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     sample = max(keys, key=len) if keys else "0" * 44
     list_size = _fit_font_size_for_column(sample, col_w, font_list, max_size=10.0)
 
-    # ===== LISTA =====
     idx = 0
-    last_key_pos = None  # (x, y)
+    last_key_pos = None
 
     while idx < len(keys):
         page_start_y = y
@@ -191,7 +201,9 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
             usable_h = y - list_bottom
             lines_per_col = max(1, int(usable_h // list_line_h))
 
-    # ===== TOTAL (logo após a última chave) =====
+    # =========================
+    # TOTAL (APÓS ÚLTIMA CHAVE)
+    # =========================
     if last_key_pos is not None:
         _, last_y = last_key_pos
         total_y = last_y - (list_line_h * 1.5)
@@ -206,15 +218,15 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     c.setFont(font_main, 11)
     c.drawString(left, total_y, f"TOTAL DA REMESSA:  {len(keys)} VOLUMES")
 
-    # ===== ASSINATURAS (LINHA ACIMA, TEXTO ABAIXO) =====
-    sig_line_y = 22 * mm         # altura da linha
-    label_y = sig_line_y - 8     # texto abaixo da linha
+    # =========================
+    # ASSINATURAS (LINHA ACIMA)
+    # =========================
+    sig_line_y = 22 * mm
+    label_y = sig_line_y - 8
 
-    # linhas (acima)
     c.line(left, sig_line_y, w * 0.45, sig_line_y)
     c.line(w * 0.58, sig_line_y, w - right, sig_line_y)
 
-    # textos (abaixo)
     c.setFont(font_main, 10)
     c.drawString(left, label_y, "ASSINATURA DO REPRESENTANTE")
     c.drawString(w * 0.58, label_y, "ASSINATURA DO MOTORISTA")
