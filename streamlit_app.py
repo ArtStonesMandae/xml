@@ -8,6 +8,7 @@ from pypdf import PdfReader
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
 
 KEY_RE = re.compile(r"\b\d{44}\b")
 
@@ -27,7 +28,6 @@ def extract_keys_from_pdf(pdf_path: str) -> List[str]:
             if k not in seen:
                 seen.add(k)
                 keys.append(k)
-
     return keys
 
 
@@ -39,7 +39,6 @@ def today_br() -> str:
 
 
 def normalize_data(d: str) -> str:
-    """Tenta validar dd/mm/aaaa. Se inválida, usa hoje."""
     s = (d or "").strip()
     try:
         dt = datetime.strptime(s, "%d/%m/%Y")
@@ -49,7 +48,6 @@ def normalize_data(d: str) -> str:
 
 
 def normalize_hora(h: str) -> str:
-    """Mantém o padrão '_____ : _____' quando vazio/placeholder."""
     if not h or not h.strip():
         return "_____ : _____"
     s = h.strip()
@@ -65,85 +63,156 @@ def write_txt(out_path: str, keys: List[str]) -> None:
 
 
 # =========================
-# PDF (AJUSTADO: MENOS ESPAÇO)
+# PDF (CLIENTE FIXO + DATA AO LADO + COLUNAS 2/3 SEM QUEBRAR TEXTO)
 # =========================
-def _new_page_text(c: canvas.Canvas) -> Tuple[float, float, float, float]:
+def _page_geometry() -> Tuple[float, float, float, float, float, float]:
+    """
+    Retorna: (w, h, left, right, top, bottom)
+    bottom já reserva área para TOTAL + assinaturas.
+    """
     w, h = A4
-    left = 28 * mm
-    top_y = h - 28 * mm
-    return w, h, left, top_y
+    left = 18 * mm
+    right = 18 * mm
+    top = h - 18 * mm
+    bottom = 42 * mm  # reserva rodapé (total + assinaturas)
+    return w, h, left, right, top, bottom
+
+
+def _fit_font_size_for_column(text_sample: str, col_width: float, font: str, max_size: float) -> float:
+    """
+    Escolhe um tamanho de fonte que NÃO estoure a coluna.
+    Mantém o texto em 1 linha (sem quebra).
+    """
+    size = max_size
+    while size >= 7.5:
+        if pdfmetrics.stringWidth(text_sample, font, size) <= col_width:
+            return size
+        size -= 0.2
+    return 7.5
+
+
+def _choose_columns(keys: List[str], lines_per_col: int) -> int:
+    """
+    Regra prática:
+    - tenta 2 colunas; se ainda ficar muito longo (muitas páginas), tenta 3.
+    (3 colunas pode aumentar folhas em alguns casos, mas economiza quando o problema é largura/compactação.)
+    """
+    n = len(keys)
+    # páginas com 2 colunas
+    per_page_2 = lines_per_col * 2
+    pages_2 = (n + per_page_2 - 1) // per_page_2
+
+    # páginas com 3 colunas
+    per_page_3 = lines_per_col * 3
+    pages_3 = (n + per_page_3 - 1) // per_page_3
+
+    # Preferência: 2 colunas sempre, exceto quando 3 reduzir páginas
+    return 3 if pages_3 < pages_2 else 2
 
 
 def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     """
-    Estilo do exemplo, porém com espaçamento ajustado:
-    - Courier (monoespaçado)
-    - Menos respiro no topo e entre blocos
-    - Lista mais compacta
-    - Assinaturas no rodapé (sem linhas)
+    Gera PDF:
+    - CLIENTE fixo: ArtStones
+    - DATA na mesma linha (ao lado)
+    - Lista de chaves em 2 colunas; se 3 reduzir páginas, usa 3
+    - Fonte menor para caber (nunca quebra a chave)
+    - TOTAL + assinaturas no rodapé da última página
     """
     c = canvas.Canvas(out_path, pagesize=A4)
 
-    w, h, left, y = _new_page_text(c)
+    w, h, left, right, top, bottom = _page_geometry()
+    gutter = 10 * mm  # espaço entre colunas
 
     font_main = "Courier"
     font_list = "Courier"
-    font_size_main = 12
-    font_size_list = 12
 
-    # ↓↓↓ principal ajuste de "muito espaçado"
-    line_h = 6.2 * mm  # antes: 8.2mm
+    # Cabeçalho (compacto)
+    main_size = 11
+    line_h = 6.2 * mm
 
-    def nl(n: float = 1.0):
+    y = top
+
+    def line(txt: str, size: float = main_size):
         nonlocal y
-        y -= line_h * n
-
-    def line(txt: str = ""):
-        nonlocal y
-        c.setFont(font_main, font_size_main)
+        c.setFont(font_main, size)
         c.drawString(left, y, txt)
-        nl(1.0)
+        y -= line_h
 
-    def ensure_space(min_bottom_mm: float = 60):
-        """Garante espaço pro rodapé (assinaturas)."""
-        nonlocal w, h, left, y
-        if y < (min_bottom_mm * mm):
-            c.showPage()
-            w, h, left, y = _new_page_text(c)
+    # ===== CABEÇALHO =====
+    # Cliente fixo + data ao lado (mesma linha)
+    line(f"CLIENTE:  ArtStones     DATA DA COLETA:  {data}", size=11)
+    y -= line_h * 0.6
 
-    # ===== CABEÇALHO (menos espaço) =====
-    line("CLIENTE:")
-    nl(2.0)
+    # Hora (mantém a estética do exemplo, mas sem excesso de espaço)
+    line("HORA DA COLETA:", size=11)
+    line(hora, size=11)
+    y -= line_h * 0.8
 
-    line("DATA DA COLETA:")
-    line(data)
-    nl(1.8)
+    line("CHAVES DE ACESSO:", size=11)
+    y -= line_h * 0.4
 
-    line("HORA DA COLETA:")
-    nl(0.4)
-    line(hora)
-    nl(1.8)
+    # Área útil para colunas (do y atual até bottom)
+    usable_h = y - bottom
+    # Quantidade de linhas por coluna, com um espaçamento ligeiramente compacto
+    list_line_h = 5.2 * mm
+    lines_per_col = max(1, int(usable_h // list_line_h))
 
-    line("CHAVES DE ACESSO:")
-    nl(0.4)
+    # Define 2 ou 3 colunas
+    cols = _choose_columns(keys, lines_per_col)
 
-    # ===== LISTA (mais compacta) =====
-    c.setFont(font_list, font_size_list)
-    for k in keys:
-        ensure_space(min_bottom_mm=70)
-        c.drawString(left, y, k)
-        nl(0.85)  # antes: 1.0
+    # Largura da coluna
+    available_w = w - left - right - gutter * (cols - 1)
+    col_w = available_w / cols
 
-    nl(1.0)
-    line(f"TOTAL DA REMESSA:  {len(keys)} VOLUMES")
+    # Fonte da lista: escolhe tamanho que caiba na coluna (sem quebrar texto)
+    sample = max(keys, key=len) if keys else "0" * 44
+    list_size = _fit_font_size_for_column(sample, col_w, font_list, max_size=10.0)
 
-    # ===== ASSINATURAS (rodapé) =====
-    if y < (85 * mm):
+    def new_page():
+        nonlocal y, w, h, left, right, top, bottom, usable_h, lines_per_col
         c.showPage()
-        w, h, left, y = _new_page_text(c)
+        w, h, left, right, top, bottom = _page_geometry()
+        y = top
 
-    sig_y = 22 * mm
-    c.setFont(font_main, 10.5)
+        # Repetir somente o título da seção na nova página (para economizar espaço)
+        c.setFont(font_main, 11)
+        c.drawString(left, y, "CHAVES DE ACESSO:")
+        y -= line_h * 1.1
+
+        usable_h = y - bottom
+        lines_per_col = max(1, int(usable_h // list_line_h))
+
+    # ===== LISTAGEM EM COLUNAS =====
+    idx = 0
+    while idx < len(keys):
+        # por página
+        for col in range(cols):
+            x = left + col * (col_w + gutter)
+            yy = y
+            c.setFont(font_list, list_size)
+
+            for _ in range(lines_per_col):
+                if idx >= len(keys):
+                    break
+                # 1 chave por linha, sem quebra
+                c.drawString(x, yy, keys[idx])
+                yy -= list_line_h
+                idx += 1
+
+            if idx >= len(keys):
+                break
+
+        if idx < len(keys):
+            new_page()
+
+    # ===== RODAPÉ NA ÚLTIMA PÁGINA =====
+    # TOTAL + assinaturas (sem linhas)
+    c.setFont(font_main, 11)
+    c.drawString(left, bottom + 18 * mm, f"TOTAL DA REMESSA:  {len(keys)} VOLUMES")
+
+    sig_y = 18 * mm
+    c.setFont(font_main, 10)
     c.drawString(left, sig_y, "ASSINATURA DO REPRESENTANTE")
     c.drawString(w * 0.58, sig_y, "ASSINATURA DO MOTORISTA")
 
@@ -176,11 +245,9 @@ if st.button("Gerar arquivos", disabled=(pdf is None)):
     out_pdf = os.path.join("/tmp", f"Chaves_de_Acesso_{ts}.pdf")
     out_txt = os.path.join("/tmp", f"Chaves_{ts}.txt")
 
-    # Salva o PDF enviado
     with open(tmp_in, "wb") as f:
         f.write(pdf.read())
 
-    # Extrai chaves
     keys = extract_keys_from_pdf(tmp_in)
     if not keys:
         st.error("Não encontrei chaves de acesso (44 dígitos) no PDF.")
@@ -190,20 +257,16 @@ if st.button("Gerar arquivos", disabled=(pdf is None)):
             pass
         st.stop()
 
-    # Normaliza campos
     data_norm = normalize_data(data)
     hora_norm = normalize_hora(hora)
 
-    # Gera PDF final
     render_pdf(out_pdf, data_norm, hora_norm, keys)
 
-    # TXT opcional
     if gerar_txt:
         write_txt(out_txt, keys)
 
     st.success(f"{len(keys)} chaves encontradas.")
 
-    # Downloads
     with open(out_pdf, "rb") as f:
         st.download_button(
             "Baixar PDF pronto para imprimir",
@@ -224,7 +287,6 @@ if st.button("Gerar arquivos", disabled=(pdf is None)):
     if mostrar_preview:
         st.text_area("Prévia (primeiras 10 chaves)", "\n".join(keys[:10]), height=220)
 
-    # Limpeza
     try:
         os.remove(tmp_in)
     except Exception:
