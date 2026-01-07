@@ -109,14 +109,13 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     line_h = 6.0 * mm
     y = top
 
-    def set_font(size: float):
+    def draw(txt: str, size: float = main_size):
+        nonlocal y
         c.setFont(font_main, size)
+        c.drawString(left, y, txt)
+        y -= line_h
 
-    def draw_text(x: float, yy: float, txt: str, size: float = main_size):
-        set_font(size)
-        c.drawString(x, yy, txt)
-
-    def new_page_repeat_section_title():
+    def new_page_repeat_title():
         nonlocal y, w, h, left, right, top, bottom_sig
         c.showPage()
         w, h, left, right, top, bottom_sig = _page_geometry()
@@ -128,40 +127,28 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     # =========================
     # HEADER COM CAIXAS
     # =========================
-    # Caixa 1: CLIENTE + DATA (uma faixa)
-    header1_y = y
-    header1_h = 9 * mm
-    header1_w = w - left - right
+    header_h = 9 * mm
+    c.rect(left, y - header_h + 2, w - left - right, header_h, stroke=1, fill=0)
+    c.setFont(font_main, 11)
+    c.drawString(left + 3 * mm, y - 6 * mm,
+                 f"CLIENTE:  ArtStones     DATA DA COLETA:  {data}")
+    y -= header_h + 4 * mm
 
-    c.rect(left, header1_y - header1_h + 2, header1_w, header1_h, stroke=1, fill=0)
-    draw_text(left + 3 * mm, header1_y - 6 * mm, f"CLIENTE:  ArtStones     DATA DA COLETA:  {data}", size=11)
-
-    y -= header1_h + 4 * mm
-
-    # Caixa 2: HORA (bloco menor, como no seu exemplo)
-    box2_x = left
-    box2_w = 55 * mm
-    box2_h = 22 * mm
-    box2_top = y
-
-    c.rect(box2_x, box2_top - box2_h, box2_w, box2_h, stroke=1, fill=0)
-    draw_text(box2_x + 3 * mm, box2_top - 7 * mm, "HORA DA COLETA:", size=11)
-    draw_text(box2_x + 3 * mm, box2_top - 16 * mm, hora, size=11)
-
-    # Avança y para depois do bloco de hora
-    y = box2_top - box2_h - (6 * mm)
-
-    # Espaçamento maior antes de "CHAVES DE ACESSO:"
-    y -= 6 * mm
+    box_w = 55 * mm
+    box_h = 22 * mm
+    c.rect(left, y - box_h, box_w, box_h, stroke=1, fill=0)
+    c.drawString(left + 3 * mm, y - 7 * mm, "HORA DA COLETA:")
+    c.drawString(left + 3 * mm, y - 16 * mm, hora)
+    y -= box_h + 12 * mm  # espaçamento maior aqui 👈
 
     c.setFont(font_main, 11)
     c.drawString(left, y, "CHAVES DE ACESSO:")
     y -= line_h * 1.0
 
     # =========================
-    # LISTA EM COLUNAS (2/3)
+    # LISTA EM COLUNAS
     # =========================
-    list_bottom = bottom_sig + 20 * mm
+    list_bottom = bottom_sig + 22 * mm
     list_line_h = 5.0 * mm
     usable_h = y - list_bottom
     lines_per_col = max(1, int(usable_h // list_line_h))
@@ -172,13 +159,14 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     col_w = available_w / cols
 
     sample = max(keys, key=len) if keys else "0" * 44
-    list_size = _fit_font_size_for_column(sample, col_w, font_list, max_size=10.0)
+    list_size = _fit_font_size_for_column(sample, col_w, font_list, 10.0)
 
     idx = 0
-    last_key_pos = None
+    lowest_y_on_page = y  # 👈 controla o ponto mais baixo da lista
 
     while idx < len(keys):
         page_start_y = y
+        lowest_y_on_page = y
 
         for col in range(cols):
             x = left + col * (col_w + gutter)
@@ -189,7 +177,7 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
                 if idx >= len(keys):
                     break
                 c.drawString(x, yy, keys[idx])
-                last_key_pos = (x, yy)
+                lowest_y_on_page = min(lowest_y_on_page, yy)
                 yy -= list_line_h
                 idx += 1
 
@@ -197,20 +185,16 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
                 break
 
         if idx < len(keys):
-            new_page_repeat_section_title()
+            new_page_repeat_title()
             usable_h = y - list_bottom
             lines_per_col = max(1, int(usable_h // list_line_h))
 
     # =========================
-    # TOTAL (APÓS ÚLTIMA CHAVE)
+    # TOTAL DA REMESSA (AGORA CERTO)
     # =========================
-    if last_key_pos is not None:
-        _, last_y = last_key_pos
-        total_y = last_y - (list_line_h * 1.5)
-    else:
-        total_y = y - (list_line_h * 1.0)
+    total_y = lowest_y_on_page - (list_line_h * 1.6)
 
-    if total_y < (bottom_sig + 22 * mm):
+    if total_y < (bottom_sig + 20 * mm):
         c.showPage()
         w, h, left, right, top, bottom_sig = _page_geometry()
         total_y = h - 30 * mm
@@ -219,7 +203,7 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     c.drawString(left, total_y, f"TOTAL DA REMESSA:  {len(keys)} VOLUMES")
 
     # =========================
-    # ASSINATURAS (LINHA ACIMA)
+    # ASSINATURAS
     # =========================
     sig_line_y = 22 * mm
     label_y = sig_line_y - 8
@@ -232,77 +216,3 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     c.drawString(w * 0.58, label_y, "ASSINATURA DO MOTORISTA")
 
     c.save()
-
-
-# =========================
-# UI - Streamlit
-# =========================
-st.set_page_config(page_title="Extrator de Chaves NF-e", layout="centered")
-st.title("Extrator de Chaves NF-e (PDF → PDF para imprimir)")
-
-pdf = st.file_uploader("Envie o PDF", type=["pdf"])
-data = st.text_input("Data da coleta", value=today_br())
-hora = st.text_input("Hora da coleta", value="_____ : _____")
-
-col1, col2 = st.columns(2)
-with col1:
-    gerar_txt = st.checkbox("Gerar TXT (opcional)", value=True)
-with col2:
-    mostrar_preview = st.checkbox("Mostrar prévia (10 primeiras chaves)", value=True)
-
-if pdf is not None:
-    st.caption(f"Arquivo: {pdf.name}")
-
-if st.button("Gerar arquivos", disabled=(pdf is None)):
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-
-    tmp_in = os.path.join("/tmp", f"entrada_{ts}.pdf")
-    out_pdf = os.path.join("/tmp", f"Chaves_de_Acesso_{ts}.pdf")
-    out_txt = os.path.join("/tmp", f"Chaves_{ts}.txt")
-
-    with open(tmp_in, "wb") as f:
-        f.write(pdf.read())
-
-    keys = extract_keys_from_pdf(tmp_in)
-    if not keys:
-        st.error("Não encontrei chaves de acesso (44 dígitos) no PDF.")
-        try:
-            os.remove(tmp_in)
-        except Exception:
-            pass
-        st.stop()
-
-    data_norm = normalize_data(data)
-    hora_norm = normalize_hora(hora)
-
-    render_pdf(out_pdf, data_norm, hora_norm, keys)
-
-    if gerar_txt:
-        write_txt(out_txt, keys)
-
-    st.success(f"{len(keys)} chaves encontradas.")
-
-    with open(out_pdf, "rb") as f:
-        st.download_button(
-            "Baixar PDF pronto para imprimir",
-            data=f,
-            file_name=os.path.basename(out_pdf),
-            mime="application/pdf",
-        )
-
-    if gerar_txt:
-        with open(out_txt, "rb") as f:
-            st.download_button(
-                "Baixar TXT (opcional)",
-                data=f,
-                file_name=os.path.basename(out_txt),
-                mime="text/plain",
-            )
-
-    if mostrar_preview:
-        st.text_area("Prévia (primeiras 10 chaves)", "\n".join(keys[:10]), height=220)
-
-    try:
-        os.remove(tmp_in)
-    except Exception:
-        pass
