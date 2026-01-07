@@ -65,10 +65,9 @@ def write_txt(out_path: str, keys: List[str]) -> None:
 
 
 # =========================
-# PDF (AJUSTADO PARA FICAR IGUAL AO EXEMPLO)
+# PDF (AJUSTADO: MENOS ESPAÇO)
 # =========================
 def _new_page_text(c: canvas.Canvas) -> Tuple[float, float, float, float]:
-    """Layout mais 'texto impresso': margens menores e topo alto."""
     w, h = A4
     left = 28 * mm
     top_y = h - 28 * mm
@@ -77,11 +76,11 @@ def _new_page_text(c: canvas.Canvas) -> Tuple[float, float, float, float]:
 
 def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     """
-    Gera PDF A4 no estilo do exemplo:
-    - Fonte monoespaçada (Courier) para cara de documento impresso
-    - Muito espaço entre blocos
-    - Lista simples
-    - Assinaturas no rodapé, sem linhas desenhadas
+    Estilo do exemplo, porém com espaçamento ajustado:
+    - Courier (monoespaçado)
+    - Menos respiro no topo e entre blocos
+    - Lista mais compacta
+    - Assinaturas no rodapé (sem linhas)
     """
     c = canvas.Canvas(out_path, pagesize=A4)
 
@@ -92,7 +91,8 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     font_size_main = 12
     font_size_list = 12
 
-    line_h = 8.2 * mm  # mais arejado que o seu original
+    # ↓↓↓ principal ajuste de "muito espaçado"
+    line_h = 6.2 * mm  # antes: 8.2mm
 
     def nl(n: float = 1.0):
         nonlocal y
@@ -105,40 +105,39 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
         nl(1.0)
 
     def ensure_space(min_bottom_mm: float = 60):
-        """Garante espaço para o rodapé (assinaturas) e não deixa encostar no fim."""
+        """Garante espaço pro rodapé (assinaturas)."""
         nonlocal w, h, left, y
         if y < (min_bottom_mm * mm):
             c.showPage()
             w, h, left, y = _new_page_text(c)
 
-    # ===== CABEÇALHO (com bastante respiro) =====
+    # ===== CABEÇALHO (menos espaço) =====
     line("CLIENTE:")
-    nl(3.5)
+    nl(2.0)
 
     line("DATA DA COLETA:")
     line(data)
-    nl(2.8)
+    nl(1.8)
 
     line("HORA DA COLETA:")
-    nl(0.6)
+    nl(0.4)
     line(hora)
-    nl(2.8)
+    nl(1.8)
 
-    # ===== LISTA =====
     line("CHAVES DE ACESSO:")
-    nl(0.8)
+    nl(0.4)
 
+    # ===== LISTA (mais compacta) =====
     c.setFont(font_list, font_size_list)
     for k in keys:
         ensure_space(min_bottom_mm=70)
         c.drawString(left, y, k)
-        nl(1.0)
+        nl(0.85)  # antes: 1.0
 
-    nl(1.2)
+    nl(1.0)
     line(f"TOTAL DA REMESSA:  {len(keys)} VOLUMES")
 
-    # ===== ASSINATURAS (sempre no rodapé, sem linhas) =====
-    # Se o conteúdo ficou muito baixo, força nova página para ficar "limpo" como no exemplo.
+    # ===== ASSINATURAS (rodapé) =====
     if y < (85 * mm):
         c.showPage()
         w, h, left, y = _new_page_text(c)
@@ -195,7 +194,7 @@ if st.button("Gerar arquivos", disabled=(pdf is None)):
     data_norm = normalize_data(data)
     hora_norm = normalize_hora(hora)
 
-    # Gera PDF final (estilo exemplo)
+    # Gera PDF final
     render_pdf(out_pdf, data_norm, hora_norm, keys)
 
     # TXT opcional
