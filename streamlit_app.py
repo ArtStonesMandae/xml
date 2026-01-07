@@ -12,6 +12,9 @@ from reportlab.lib.units import mm
 KEY_RE = re.compile(r"\b\d{44}\b")
 
 
+# =========================
+# EXTRAÇÃO
+# =========================
 def extract_keys_from_pdf(pdf_path: str) -> List[str]:
     """Extrai chaves de 44 dígitos do PDF, removendo duplicadas e preservando ordem."""
     reader = PdfReader(pdf_path)
@@ -28,8 +31,21 @@ def extract_keys_from_pdf(pdf_path: str) -> List[str]:
     return keys
 
 
+# =========================
+# UTIL
+# =========================
 def today_br() -> str:
     return datetime.now().strftime("%d/%m/%Y")
+
+
+def normalize_data(d: str) -> str:
+    """Tenta validar dd/mm/aaaa. Se inválida, usa hoje."""
+    s = (d or "").strip()
+    try:
+        dt = datetime.strptime(s, "%d/%m/%Y")
+        return dt.strftime("%d/%m/%Y")
+    except Exception:
+        return today_br()
 
 
 def normalize_hora(h: str) -> str:
@@ -48,91 +64,89 @@ def write_txt(out_path: str, keys: List[str]) -> None:
         f.write("\n")
 
 
-def _new_page(c: canvas.Canvas) -> Tuple[float, float, float, float]:
-    """Retorna (w, h, left, top_y) para nova página com margens fixas."""
+# =========================
+# PDF (AJUSTADO PARA FICAR IGUAL AO EXEMPLO)
+# =========================
+def _new_page_text(c: canvas.Canvas) -> Tuple[float, float, float, float]:
+    """Layout mais 'texto impresso': margens menores e topo alto."""
     w, h = A4
-    left = 30 * mm
-    top_y = h - 30 * mm
+    left = 28 * mm
+    top_y = h - 28 * mm
     return w, h, left, top_y
 
 
 def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     """
-    Gera PDF A4 pronto para imprimir, com layout 'arejado' no padrão do exemplo:
-    - Espaços grandes entre blocos
-    - Lista começa mais abaixo
-    - Assinaturas alinhadas e com linhas
+    Gera PDF A4 no estilo do exemplo:
+    - Fonte monoespaçada (Courier) para cara de documento impresso
+    - Muito espaço entre blocos
+    - Lista simples
+    - Assinaturas no rodapé, sem linhas desenhadas
     """
     c = canvas.Canvas(out_path, pagesize=A4)
 
-    w, h, left, y = _new_page(c)
+    w, h, left, y = _new_page_text(c)
 
-    # Tipografia: o exemplo tem "cara de documento operacional".
-    # Helvetica funciona bem; se quiser ainda mais "datilografado", troque para "Courier".
-    font_main = "Helvetica"
-    font_list = "Helvetica"
+    font_main = "Courier"
+    font_list = "Courier"
+    font_size_main = 12
+    font_size_list = 12
 
-    line_h = 7.0 * mm  # altura base de linha (mais confortável)
+    line_h = 8.2 * mm  # mais arejado que o seu original
 
-    def spacer(lines: float = 1.0):
+    def nl(n: float = 1.0):
         nonlocal y
-        y -= line_h * lines
+        y -= line_h * n
 
-    def draw_line(txt: str, size: float = 11, font: str = None):
+    def line(txt: str = ""):
         nonlocal y
-        c.setFont(font or font_main, size)
+        c.setFont(font_main, font_size_main)
         c.drawString(left, y, txt)
-        y -= line_h
+        nl(1.0)
 
-    def ensure_space(min_y_mm: float = 35):
-        """Se y estiver perto do rodapé, cria nova página."""
+    def ensure_space(min_bottom_mm: float = 60):
+        """Garante espaço para o rodapé (assinaturas) e não deixa encostar no fim."""
         nonlocal w, h, left, y
-        if y < (min_y_mm * mm):
+        if y < (min_bottom_mm * mm):
             c.showPage()
-            w, h, left, y = _new_page(c)
+            w, h, left, y = _new_page_text(c)
 
-    # ===== CABEÇALHO (com respiro igual ao exemplo) =====
-    draw_line("CLIENTE:", size=11)
-    spacer(3.0)
+    # ===== CABEÇALHO (com bastante respiro) =====
+    line("CLIENTE:")
+    nl(3.5)
 
-    draw_line("DATA DA COLETA:", size=11)
-    draw_line(data, size=11)
-    spacer(3.0)
+    line("DATA DA COLETA:")
+    line(data)
+    nl(2.8)
 
-    draw_line("HORA DA COLETA:", size=11)
-    draw_line(hora, size=11)
-    spacer(2.5)
+    line("HORA DA COLETA:")
+    nl(0.6)
+    line(hora)
+    nl(2.8)
 
     # ===== LISTA =====
-    draw_line("CHAVES DE ACESSO:", size=11)
-    spacer(1.2)
+    line("CHAVES DE ACESSO:")
+    nl(0.8)
 
-    # Lista com tamanho levemente menor e espaçamento agradável
-    c.setFont(font_list, 10.6)
+    c.setFont(font_list, font_size_list)
     for k in keys:
-        ensure_space(min_y_mm=40)
+        ensure_space(min_bottom_mm=70)
         c.drawString(left, y, k)
-        y -= line_h * 0.95
+        nl(1.0)
 
-    spacer(2.2)
+    nl(1.2)
+    line(f"TOTAL DA REMESSA:  {len(keys)} VOLUMES")
 
-    draw_line(f"TOTAL DA REMESSA:  {len(keys)} VOLUMES", size=11)
-
-    # ===== ASSINATURAS NO RODAPÉ (sempre na última página) =====
-    # Se o conteúdo ficou muito baixo, cria nova página para o rodapé ficar limpo.
-    if y < (60 * mm):
+    # ===== ASSINATURAS (sempre no rodapé, sem linhas) =====
+    # Se o conteúdo ficou muito baixo, força nova página para ficar "limpo" como no exemplo.
+    if y < (85 * mm):
         c.showPage()
-        w, h, left, y = _new_page(c)
+        w, h, left, y = _new_page_text(c)
 
-    sig_y = 25 * mm
-
-    c.setFont(font_main, 9.5)
-    c.drawCentredString(w * 0.35, sig_y + 12, "ASSINATURA DO REPRESENTANTE")
-    c.drawCentredString(w * 0.75, sig_y + 12, "ASSINATURA DO MOTORISTA")
-
-    # Linhas de assinatura
-    c.line(w * 0.20, sig_y + 10, w * 0.50, sig_y + 10)
-    c.line(w * 0.60, sig_y + 10, w * 0.90, sig_y + 10)
+    sig_y = 22 * mm
+    c.setFont(font_main, 10.5)
+    c.drawString(left, sig_y, "ASSINATURA DO REPRESENTANTE")
+    c.drawString(w * 0.58, sig_y, "ASSINATURA DO MOTORISTA")
 
     c.save()
 
@@ -159,7 +173,6 @@ if pdf is not None:
 if st.button("Gerar arquivos", disabled=(pdf is None)):
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    # Em ambiente de servidor, /tmp é mais seguro.
     tmp_in = os.path.join("/tmp", f"entrada_{ts}.pdf")
     out_pdf = os.path.join("/tmp", f"Chaves_de_Acesso_{ts}.pdf")
     out_txt = os.path.join("/tmp", f"Chaves_{ts}.txt")
@@ -179,10 +192,10 @@ if st.button("Gerar arquivos", disabled=(pdf is None)):
         st.stop()
 
     # Normaliza campos
-    data_norm = (data or today_br()).strip()
+    data_norm = normalize_data(data)
     hora_norm = normalize_hora(hora)
 
-    # Gera PDF final
+    # Gera PDF final (estilo exemplo)
     render_pdf(out_pdf, data_norm, hora_norm, keys)
 
     # TXT opcional
@@ -209,7 +222,6 @@ if st.button("Gerar arquivos", disabled=(pdf is None)):
                 mime="text/plain",
             )
 
-    # Prévia
     if mostrar_preview:
         st.text_area("Prévia (primeiras 10 chaves)", "\n".join(keys[:10]), height=220)
 
