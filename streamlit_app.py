@@ -20,7 +20,6 @@ def extract_keys_from_pdf(pdf_path: str) -> List[str]:
     reader = PdfReader(pdf_path)
     keys: List[str] = []
     seen = set()
-
     for page in reader.pages:
         text = page.extract_text() or ""
         for k in KEY_RE.findall(text):
@@ -64,16 +63,15 @@ def write_txt(out_path: str, keys: List[str]) -> None:
 # =========================
 # PDF HELPERS
 # =========================
-def _page_geometry() -> Tuple[float, float, float, float, float, float]:
+def _page_geometry() -> Tuple[float, float, float, float, float]:
     """
-    Retorna: (w, h, left, right, top, bottom_sig)
+    Retorna: (w, h, left, right, top)
     """
     w, h = A4
     left = 16 * mm
     right = 16 * mm
     top = h - 16 * mm
-    bottom_sig = 26 * mm
-    return w, h, left, right, top, bottom_sig
+    return w, h, left, right, top
 
 
 def _fit_font_size_for_column(text_sample: str, col_width: float, font: str, max_size: float) -> float:
@@ -102,28 +100,28 @@ def _choose_columns_and_font(
     min_font_ok: float = 8.5,
 ) -> Tuple[int, float, float]:
     """
-    Decide 2 ou 3 colunas, MAS só permite 3 se a chave couber com fonte >= min_font_ok.
-    Retorna: (cols, list_size, col_w)
+    Decide 2 ou 3 colunas.
+    Só aceita 3 colunas se:
+    - reduzir páginas E
+    - a fonte ficar >= min_font_ok (pra não “invadir” outra coluna)
     """
     sample = max(keys, key=len) if keys else "0" * 44
 
-    # Testa 2 colunas
-    avail2 = w - left - right - gutter * (2 - 1)
+    # 2 colunas
+    avail2 = w - left - right - gutter * 1
     col_w2 = avail2 / 2
     size2 = _fit_font_size_for_column(sample, col_w2, font, max_font)
     pages2 = _pages_for(len(keys), 2, lines_per_col)
 
-    # Testa 3 colunas
-    avail3 = w - left - right - gutter * (3 - 1)
+    # 3 colunas
+    avail3 = w - left - right - gutter * 2
     col_w3 = avail3 / 3
     size3 = _fit_font_size_for_column(sample, col_w3, font, max_font)
     pages3 = _pages_for(len(keys), 3, lines_per_col)
 
-    # Só aceita 3 colunas se ficar legível (fonte >= min_font_ok) e reduzir páginas
     if size3 >= min_font_ok and pages3 < pages2:
         return 3, size3, col_w3
 
-    # Caso contrário, 2 colunas
     return 2, size2, col_w2
 
 
@@ -133,26 +131,41 @@ def _choose_columns_and_font(
 def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     c = canvas.Canvas(out_path, pagesize=A4)
 
-    w, h, left, right, top, bottom_sig = _page_geometry()
-    gutter = 16 * mm  # ↑ mais espaço entre colunas para não encostar
+    w, h, left, right, top = _page_geometry()
 
     font_main = "Courier"
     font_list = "Courier"
 
-    main_size = 11
     line_h = 6.0 * mm
+
+    # ----- Rodapé fixo (assinaturas) -----
+    sig_line_y = 22 * mm        # linha das assinaturas
+    label_y = sig_line_y - 8    # texto abaixo da linha
+    sig_block_top = sig_line_y + 6 * mm  # “topo” do bloco de assinatura
+
+    # TOTAL sempre acima das assinaturas (e nunca vai pra outra página “à toa”)
+    total_min_y = sig_block_top + 10 * mm
+
+    # Espaço mínimo entre última chave e TOTAL
+    gap_keys_to_total = 1.2
+
+    # Gutter maior evita colunas “coladas”
+    gutter = 16 * mm
+
     y = top
 
     def new_page_repeat_title():
-        nonlocal y, w, h, left, right, top, bottom_sig
+        nonlocal y, w, h, left, right, top
         c.showPage()
-        w, h, left, right, top, bottom_sig = _page_geometry()
+        w, h, left, right, top = _page_geometry()
         y = top
         c.setFont(font_main, 11)
         c.drawString(left, y, "CHAVES DE ACESSO:")
         y -= line_h * 1.1
 
-    # ===== HEADER COM CAIXAS =====
+    # =========================
+    # HEADER COM CAIXAS
+    # =========================
     header_h = 9 * mm
     c.rect(left, y - header_h + 2, w - left - right, header_h, stroke=1, fill=0)
     c.setFont(font_main, 11)
@@ -173,9 +186,15 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     c.drawString(left, y, "CHAVES DE ACESSO:")
     y -= line_h * 1.0
 
-    # ===== LISTA EM COLUNAS =====
-    list_bottom = bottom_sig + 22 * mm
+    # =========================
+    # LISTA EM COLUNAS
+    # =========================
     list_line_h = 5.0 * mm
+
+    # Aqui é o ponto-chave: a lista pode descer até “logo acima do TOTAL”
+    # (que por sua vez é logo acima das assinaturas).
+    list_bottom = total_min_y + (list_line_h * 1.0)
+
     usable_h = y - list_bottom
     lines_per_col = max(1, int(usable_h // list_line_h))
 
@@ -188,7 +207,7 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
         lines_per_col=lines_per_col,
         font=font_list,
         max_font=10.0,
-        min_font_ok=8.5,  # <- trava: 3 colunas só se continuar legível
+        min_font_ok=8.5,
     )
 
     idx = 0
@@ -206,7 +225,7 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
             for _ in range(lines_per_col):
                 if idx >= len(keys):
                     break
-                c.drawString(x, yy, keys[idx])  # 1 por linha, sem quebra
+                c.drawString(x, yy, keys[idx])
                 lowest_y_on_page = min(lowest_y_on_page, yy)
                 yy -= list_line_h
                 idx += 1
@@ -219,21 +238,18 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
             usable_h = y - list_bottom
             lines_per_col = max(1, int(usable_h // list_line_h))
 
-    # ===== TOTAL (sempre abaixo da última linha visual) =====
-    total_y = lowest_y_on_page - (list_line_h * 1.6)
-
-    if total_y < (bottom_sig + 20 * mm):
-        c.showPage()
-        w, h, left, right, top, bottom_sig = _page_geometry()
-        total_y = h - 30 * mm
+    # =========================
+    # TOTAL (sempre na mesma página, acima das assinaturas)
+    # =========================
+    total_y = lowest_y_on_page - (list_line_h * gap_keys_to_total)
+    total_y = max(total_y, total_min_y)  # garante que não invade assinaturas
 
     c.setFont(font_main, 11)
     c.drawString(left, total_y, f"TOTAL DA REMESSA:  {len(keys)} VOLUMES")
 
-    # ===== ASSINATURAS (linha acima, texto abaixo) =====
-    sig_line_y = 22 * mm
-    label_y = sig_line_y - 8
-
+    # =========================
+    # ASSINATURAS (linha acima, texto abaixo)
+    # =========================
     c.line(left, sig_line_y, w * 0.45, sig_line_y)
     c.line(w * 0.58, sig_line_y, w - right, sig_line_y)
 
