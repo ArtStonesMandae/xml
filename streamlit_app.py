@@ -147,7 +147,7 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     total_min_y = sig_block_top + 10 * mm
 
     # Espaço mínimo entre última chave e TOTAL
-    gap_keys_to_total = 1.8
+    gap_keys_to_total = 1.6
 
     # Gutter maior evita colunas “coladas”
     gutter = 16 * mm
