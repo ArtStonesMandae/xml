@@ -1,7 +1,7 @@
 import os
 import re
 from datetime import datetime
-from typing import List, Tuple
+from typing import List
 
 import streamlit as st
 from pypdf import PdfReader
@@ -20,12 +20,27 @@ def extract_keys_from_pdf(pdf_path: str) -> List[str]:
     reader = PdfReader(pdf_path)
     keys: List[str] = []
     seen = set()
+
     for page in reader.pages:
         text = page.extract_text() or ""
         for k in KEY_RE.findall(text):
             if k not in seen:
                 seen.add(k)
                 keys.append(k)
+    return keys
+
+
+def extract_keys_from_uploaded_file(uploaded_file) -> List[str]:
+    """Extrai chaves de um UploadedFile do Streamlit."""
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    tmp_in = os.path.join("/tmp", f"entrada_{ts}.pdf")
+    with open(tmp_in, "wb") as f:
+        f.write(uploaded_file.read())
+    keys = extract_keys_from_pdf(tmp_in)
+    try:
+        os.remove(tmp_in)
+    except Exception:
+        pass
     return keys
 
 
@@ -63,10 +78,7 @@ def write_txt(out_path: str, keys: List[str]) -> None:
 # =========================
 # PDF HELPERS
 # =========================
-def _page_geometry() -> Tuple[float, float, float, float, float]:
-    """
-    Retorna: (w, h, left, right, top)
-    """
+def _page_geometry():
     w, h = A4
     left = 16 * mm
     right = 16 * mm
@@ -98,22 +110,14 @@ def _choose_columns_and_font(
     font: str,
     max_font: float,
     min_font_ok: float = 8.5,
-) -> Tuple[int, float, float]:
-    """
-    Decide 2 ou 3 colunas.
-    Só aceita 3 colunas se:
-    - reduzir páginas E
-    - a fonte ficar >= min_font_ok (pra não “invadir” outra coluna)
-    """
+):
     sample = max(keys, key=len) if keys else "0" * 44
 
-    # 2 colunas
     avail2 = w - left - right - gutter * 1
     col_w2 = avail2 / 2
     size2 = _fit_font_size_for_column(sample, col_w2, font, max_font)
     pages2 = _pages_for(len(keys), 2, lines_per_col)
 
-    # 3 colunas
     avail3 = w - left - right - gutter * 2
     col_w3 = avail3 / 3
     size3 = _fit_font_size_for_column(sample, col_w3, font, max_font)
@@ -139,17 +143,16 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     line_h = 6.0 * mm
 
     # ----- Rodapé fixo (assinaturas) -----
-    sig_line_y = 22 * mm        # linha das assinaturas
-    label_y = sig_line_y - 8    # texto abaixo da linha
-    sig_block_top = sig_line_y + 6 * mm  # “topo” do bloco de assinatura
+    sig_line_y = 22 * mm
+    label_y = sig_line_y - 8
+    sig_block_top = sig_line_y + 6 * mm
 
-    # TOTAL sempre acima das assinaturas (e nunca vai pra outra página “à toa”)
+    # TOTAL acima das assinaturas
     total_min_y = sig_block_top + 10 * mm
 
-    # Espaço mínimo entre última chave e TOTAL
-    gap_keys_to_total = 1.6
+    # Espaço entre última chave e TOTAL
+    gap_keys_to_total = 2.2
 
-    # Gutter maior evita colunas “coladas”
     gutter = 16 * mm
 
     y = top
@@ -163,9 +166,7 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
         c.drawString(left, y, "CHAVES DE ACESSO:")
         y -= line_h * 1.1
 
-    # =========================
-    # HEADER COM CAIXAS
-    # =========================
+    # ===== HEADER COM CAIXAS =====
     header_h = 9 * mm
     c.rect(left, y - header_h + 2, w - left - right, header_h, stroke=1, fill=0)
     c.setFont(font_main, 11)
@@ -178,21 +179,14 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
     c.setFont(font_main, 11)
     c.drawString(left + 3 * mm, y - 7 * mm, "HORA DA COLETA:")
     c.drawString(left + 3 * mm, y - 16 * mm, hora)
-
-    # Espaçamento maior antes das chaves
     y -= box_h + 12 * mm
 
     c.setFont(font_main, 11)
     c.drawString(left, y, "CHAVES DE ACESSO:")
     y -= line_h * 1.0
 
-    # =========================
-    # LISTA EM COLUNAS
-    # =========================
+    # ===== LISTA =====
     list_line_h = 5.0 * mm
-
-    # Aqui é o ponto-chave: a lista pode descer até “logo acima do TOTAL”
-    # (que por sua vez é logo acima das assinaturas).
     list_bottom = total_min_y + (list_line_h * 1.0)
 
     usable_h = y - list_bottom
@@ -238,18 +232,14 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
             usable_h = y - list_bottom
             lines_per_col = max(1, int(usable_h // list_line_h))
 
-    # =========================
-    # TOTAL (sempre na mesma página, acima das assinaturas)
-    # =========================
+    # ===== TOTAL =====
     total_y = lowest_y_on_page - (list_line_h * gap_keys_to_total)
-    total_y = max(total_y, total_min_y)  # garante que não invade assinaturas
+    total_y = max(total_y, total_min_y)
 
     c.setFont(font_main, 11)
     c.drawString(left, total_y, f"TOTAL DA REMESSA:  {len(keys)} VOLUMES")
 
-    # =========================
-    # ASSINATURAS (linha acima, texto abaixo)
-    # =========================
+    # ===== ASSINATURAS =====
     c.line(left, sig_line_y, w * 0.45, sig_line_y)
     c.line(w * 0.58, sig_line_y, w - right, sig_line_y)
 
@@ -261,12 +251,12 @@ def render_pdf(out_path: str, data: str, hora: str, keys: List[str]) -> None:
 
 
 # =========================
-# UI - Streamlit
+# UI - Streamlit (SUPORTA MÚLTIPLOS PDFs)
 # =========================
 st.set_page_config(page_title="Extrator de Chaves NF-e", layout="centered")
 st.title("Extrator de Chaves NF-e (PDF → PDF para imprimir)")
 
-pdf = st.file_uploader("Envie o PDF", type=["pdf"])
+pdfs = st.file_uploader("Envie 1 ou mais PDFs", type=["pdf"], accept_multiple_files=True)
 data = st.text_input("Data da coleta", value=today_br())
 hora = st.text_input("Hora da coleta", value="_____ : _____")
 
@@ -276,37 +266,41 @@ with col1:
 with col2:
     mostrar_preview = st.checkbox("Mostrar prévia (10 primeiras chaves)", value=True)
 
-if pdf is not None:
-    st.caption(f"Arquivo: {pdf.name}")
+if pdfs:
+    st.caption(f"{len(pdfs)} arquivo(s) selecionado(s).")
 
-if st.button("Gerar arquivos", disabled=(pdf is None)):
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-
-    tmp_in = os.path.join("/tmp", f"entrada_{ts}.pdf")
-    out_pdf = os.path.join("/tmp", f"Chaves_de_Acesso_{ts}.pdf")
-    out_txt = os.path.join("/tmp", f"Chaves_{ts}.txt")
-
-    with open(tmp_in, "wb") as f:
-        f.write(pdf.read())
-
-    keys = extract_keys_from_pdf(tmp_in)
-    if not keys:
-        st.error("Não encontrei chaves de acesso (44 dígitos) no PDF.")
-        try:
-            os.remove(tmp_in)
-        except Exception:
-            pass
-        st.stop()
-
+if st.button("Gerar arquivos", disabled=(not pdfs)):
+    # Normaliza campos
     data_norm = normalize_data(data)
     hora_norm = normalize_hora(hora)
 
-    render_pdf(out_pdf, data_norm, hora_norm, keys)
+    # Extrai e junta chaves preservando ordem entre arquivos e removendo duplicadas
+    all_keys: List[str] = []
+    seen = set()
 
+    for up in pdfs:
+        keys = extract_keys_from_uploaded_file(up)
+        for k in keys:
+            if k not in seen:
+                seen.add(k)
+                all_keys.append(k)
+
+    if not all_keys:
+        st.error("Não encontrei chaves de acesso (44 dígitos) nos PDFs enviados.")
+        st.stop()
+
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_pdf = os.path.join("/tmp", f"Chaves_de_Acesso_{ts}.pdf")
+    out_txt = os.path.join("/tmp", f"Chaves_{ts}.txt")
+
+    # Gera PDF final
+    render_pdf(out_pdf, data_norm, hora_norm, all_keys)
+
+    # TXT opcional
     if gerar_txt:
-        write_txt(out_txt, keys)
+        write_txt(out_txt, all_keys)
 
-    st.success(f"{len(keys)} chaves encontradas.")
+    st.success(f"{len(all_keys)} chaves encontradas no total.")
 
     with open(out_pdf, "rb") as f:
         st.download_button(
@@ -326,9 +320,4 @@ if st.button("Gerar arquivos", disabled=(pdf is None)):
             )
 
     if mostrar_preview:
-        st.text_area("Prévia (primeiras 10 chaves)", "\n".join(keys[:10]), height=220)
-
-    try:
-        os.remove(tmp_in)
-    except Exception:
-        pass
+        st.text_area("Prévia (primeiras 10 chaves)", "\n".join(all_keys[:10]), height=220)
